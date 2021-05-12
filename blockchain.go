@@ -16,13 +16,8 @@ type Blockchain struct {
 	Nodes               map[string]bool
 }
 
-type ChainResponse struct {
-	Length int64
-	Chain  []Block
-}
-
 func NewBlockchain() Blockchain {
-	blockchain := Blockchain{}
+	blockchain := Blockchain{Nodes: map[string]bool{}}
 
 	blockchain.NewBlock(100, "1")
 	return blockchain
@@ -80,26 +75,50 @@ func (_ *Blockchain) ProofOfWork(lastProof int64) int64 {
 	return proof
 }
 
-func ValidProof(lastProof int64, proof int64) bool {
-	hasher := crypto.SHA256.New()
-
-	guess := fmt.Sprintf("%d%d", lastProof, proof)
-
-	hasher.Write([]byte(fmt.Sprintf("%v", guess)))
-
-	output := fmt.Sprintf("%x", hasher.Sum(nil))
-
-	return output[0:4] == "0000"
-}
-
 func (b *Blockchain) RegisterNodes(address string) {
 	u, _ := url.ParseRequestURI(address)
 	hostPort := fmt.Sprintf("%s:%s", u.Hostname(), u.Port())
 	b.Nodes[hostPort] = true
 }
 
+func (b *Blockchain) ResolveConflicts() bool {
+	max_length := int64(len(b.Chain))
+	new_chain := []Block{}
+
+	for key := range b.Nodes {
+		url := fmt.Sprintf("http://%s/chain", key)
+
+		resp, err := http.Get(url)
+		if err != nil {
+			panic("Error trying get url")
+		}
+
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			panic("Error parsing json to content")
+		}
+		var content ChainResponse
+
+		json.Unmarshal([]byte(body), &content)
+
+		if content.Length > max_length && ValidChain(content.Chain) {
+			max_length = content.Length
+			new_chain = content.Chain
+		}
+	}
+
+	if len(new_chain) > 0 {
+		b.Chain = new_chain
+		return true
+	}
+
+	return false
+}
+
+
 func ValidChain(chain []Block) bool {
-	last_block := &chain[len(chain)]
+	last_block := &chain[0]
 	current_index := 1
 
 	for current_index < len(chain) {
@@ -122,41 +141,14 @@ func ValidChain(chain []Block) bool {
 	return true
 }
 
-func (b *Blockchain) ResolveConflicts() bool {
-	max_length := len(b.Chain)
-	new_chain := []Block{}
+func ValidProof(lastProof int64, proof int64) bool {
+	hasher := crypto.SHA256.New()
 
-	for key := range b.Nodes {
-		url := fmt.Sprintf("http://%s/chain", key)
+	guess := fmt.Sprintf("%d%d", lastProof, proof)
 
-		resp, err := http.Get(url)
-		if err != nil {
-			panic("Error trying get url")
-		}
+	hasher.Write([]byte(fmt.Sprintf("%v", guess)))
 
-		defer resp.Body.Close()
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			panic("Error parsing json to content")
-		}
-		content := string(body)
+	output := fmt.Sprintf("%x", hasher.Sum(nil))
 
-		var chainResponse ChainResponse
-
-		json.Unmarshal([]byte(body), &chainResponse)
-
-		if len(content) > max_length && ValidChain(chainResponse.Chain) {
-			max_length = len(content)
-			chainCopy := chainResponse.Chain
-			new_chain = chainCopy
-		}
-	}
-
-	if len(new_chain) > 0 {
-		newChainCopy := new_chain
-		b.Chain = newChainCopy
-		return true
-	}
-
-	return false
+	return output[0:4] == "0000"
 }
